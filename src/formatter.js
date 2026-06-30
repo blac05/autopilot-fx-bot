@@ -240,4 +240,78 @@ Open trades:   ${paperTrades.length}
 Win Rate:    <code>${winRate}%</code>`;
 }
 
-module.exports = { formatSignalAlert, formatScanReport, formatMarketReport, formatBalance, fp };
+// ─── Backtest Report ──────────────────────────────────────────────────────────
+
+function formatBacktest(result, symbol, pip) {
+  if (result.error) {
+    return `<b>📊 Backtest — <code>${symbol}</code></b>\n\n❌ ${result.error}`;
+  }
+  if (!result.totalTrades) {
+    return `<b>📊 Backtest — <code>${symbol}</code></b>\n\n🟡 ${result.message}`;
+  }
+
+  const toPips = v => Math.round(Math.abs(v) / (pip ?? 0.0001));
+  const winEmoji = result.winRate >= 55 ? '🟢' : result.winRate >= 45 ? '🟡' : '🔴';
+  const pfEmoji  = (typeof result.profitFactor === 'number' && result.profitFactor >= 1.5) ? '🟢'
+                 : (typeof result.profitFactor === 'number' && result.profitFactor >= 1)   ? '🟡' : '🔴';
+
+  return `<b>📊 STRATEGY BACKTEST — <code>${symbol}</code></b>
+<i>~65 days of daily closes · no lookahead bias</i>
+
+<b>🎯 Results</b>
+┣ Total trades:    <code>${result.totalTrades}</code>
+┣ Wins / Losses:   <code>${result.wins} / ${result.losses}</code>
+┣ Win Rate:        ${winEmoji} <b>${result.winRate}%</b>
+┗ Avg Confidence:  <code>${result.avgConfidence}%</code>
+
+<b>💰 Performance</b>
+┣ Profit Factor:   ${pfEmoji} <code>${result.profitFactor}</code>
+┣ Avg Win:         <code>+${toPips(result.avgWinPips)} pips</code>
+┣ Avg Loss:        <code>-${toPips(result.avgLossPips)} pips</code>
+┣ Expectancy:      <code>${result.expectancy >= 0 ? '+' : ''}${toPips(result.expectancy)} pips/trade</code>
+┗ Net Result:      <code>${result.netPips >= 0 ? '+' : ''}${toPips(result.netPips)} pips</code>
+
+<b>⚠️ Risk</b>
+┣ Max Drawdown:     <code>${toPips(result.maxDrawdown)} pips</code>
+┣ Max Loss Streak:  <code>${result.maxLossStreak} in a row</code>
+┗ Avg Hold Time:    <code>${result.avgHoldDays} days</code>
+
+<i>Past performance on historical data does not guarantee future results. Small sample size — treat as directional, not definitive.</i>`;
+}
+
+// ─── Multi-Pair Backtest Ranking ──────────────────────────────────────────────
+
+function formatBacktestAll(results) {
+  const valid = results.filter(r => r.result.totalTrades > 0);
+  const empty = results.filter(r => !r.result.totalTrades);
+
+  if (!valid.length) {
+    return `<b>📊 FULL STRATEGY BACKTEST</b>\n\n🟡 No pair produced enough qualifying signals in this window.`;
+  }
+
+  const ranked = [...valid].sort((a, b) => b.result.winRate - a.result.winRate);
+
+  let msg = `<b>📊 FULL STRATEGY BACKTEST</b>
+<i>~65 days of daily closes per pair · ranked by win rate</i>
+
+`;
+
+  for (const { symbol, decimals, pip, result: r } of ranked) {
+    const toPips = v => Math.round(Math.abs(v) / (pip ?? 0.0001));
+    const winEmoji = r.winRate >= 55 ? '🟢' : r.winRate >= 45 ? '🟡' : '🔴';
+    const pf = typeof r.profitFactor === 'number' ? r.profitFactor : r.profitFactor;
+    msg += `${winEmoji} <code>${symbol.padEnd(7)}</code> ${r.winRate}% win  ·  ${r.totalTrades} trades  ·  PF ${pf}  ·  ${r.expectancy >= 0 ? '+' : ''}${toPips(r.expectancy)} pips/trade\n`;
+  }
+
+  const avgWinRate = ranked.reduce((a, r) => a + r.result.winRate, 0) / ranked.length;
+  msg += `\n<b>Average win rate across ${ranked.length} pairs:</b> <code>${Math.round(avgWinRate * 10) / 10}%</code>`;
+
+  if (empty.length) {
+    msg += `\n\n<i>No qualifying signals for: ${empty.map(e => e.symbol).join(', ')}</i>`;
+  }
+
+  msg += `\n\n<i>Use /backtest [PAIR] for full detail on any pair. Past performance does not guarantee future results.</i>`;
+  return msg;
+}
+
+module.exports = { formatSignalAlert, formatScanReport, formatMarketReport, formatBalance, formatBacktest, formatBacktestAll, fp };

@@ -1,0 +1,17 @@
+# Environment variables — NEVER commit real tokens/keys
+.env
+.env.local
+
+# Dependencies
+node_modules/
+
+# Logs
+*.log
+npm-debug.log*
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# PM2
+.pm2/

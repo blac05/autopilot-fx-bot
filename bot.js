@@ -9,11 +9,14 @@ const { PAIRS, fetchAllPairsData, fetchLatestPrice } = require('./src/market');
 const { computeSignal }                               = require('./src/signals');
 const { getActiveSessions, getMarketOverlap }         = require('./src/sessions');
 const { runDeepAnalysis, formatAIAnalysis }            = require('./src/ai');
+const { runBacktest }                                  = require('./src/backtest');
 const {
   formatSignalAlert,
   formatScanReport,
   formatMarketReport,
   formatBalance,
+  formatBacktest,
+  formatBacktestAll,
   fp,
 } = require('./src/formatter');
 
@@ -239,6 +242,8 @@ bot.help(ctx => ctx.reply(
 /signal EURUSD — Signal for one pair
 /ai EURUSD — Full AI deep analysis
 /best — Top 3 opportunities
+/backtest EURUSD — Real historical win rate for this strategy
+/backtest all — Rank every pair by backtested win rate
 
 <b>📈 Market Info</b>
 /pairs — All pairs + live prices + signal
@@ -402,10 +407,10 @@ bot.command('status', async ctx => {
 📊 Closed trades: <code>${state.closedTrades.length}</code>
 
 <b>⏰ Scheduled Jobs</b>
-┣ Signal change check:  every 2 min
-┣ Quick scan + alerts:  every 15 min
-┣ Full scan + AI alert: every 1 hour
-┗ Market report:        every 4 hours`,
+┣ Signal change check:  every 5 min
+┣ Quick scan + alerts:  every 20 min
+┣ Full scan + AI alert: every 2 hours
+┗ Market report:        every 6 hours`,
     { parse_mode: 'HTML' }
   );
 });
@@ -419,6 +424,65 @@ bot.command('auto', async ctx => {
   } else {
     state.subscribers.delete(ctx.chat.id);
     await ctx.reply('🔴 <b>Auto-alerts DISABLED</b>\nUse /auto again to re-enable.', { parse_mode: 'HTML' });
+  }
+});
+
+// /backtest ───────────────────────────────────────────────────────────────────
+bot.command('backtest', async ctx => {
+  const arg = ctx.message.text.split(' ')[1];
+
+  // ── Backtest ALL pairs, ranked ──
+  if (arg?.toUpperCase() === 'ALL') {
+    if (Object.keys(state.marketData).length < PAIRS.length) await refreshData();
+
+    const loading = await ctx.reply('📊 Backtesting all 12 pairs — this takes a moment…', { parse_mode: 'HTML' });
+    try {
+      const results = PAIRS
+        .filter(p => state.marketData[p.symbol]?.closes?.length)
+        .map(p => ({
+          symbol:   p.symbol,
+          decimals: p.decimals,
+          pip:      p.pip,
+          result:   runBacktest(state.marketData[p.symbol].closes),
+        }));
+
+      await bot.telegram.editMessageText(
+        ctx.chat.id, loading.message_id, null,
+        formatBacktestAll(results),
+        { parse_mode: 'HTML' }
+      );
+    } catch (e) {
+      console.error('[backtest:all]', e.message);
+      await ctx.reply('❌ Full backtest failed — check logs.', { parse_mode: 'HTML' });
+    }
+    return;
+  }
+
+  // ── Backtest a single pair ──
+  const symbol = arg?.toUpperCase().replace('/', '') || 'EURUSD';
+
+  const pair = PAIRS.find(p => p.symbol === symbol);
+  if (!pair) {
+    return ctx.reply(`❌ Unknown pair <code>${symbol}</code>.\nUse /pairs to see available pairs, or /backtest all to rank every pair.`, { parse_mode: 'HTML' });
+  }
+
+  if (!state.marketData[symbol]) await refreshData();
+  const d = state.marketData[symbol];
+  if (!d?.closes?.length) {
+    return ctx.reply(`❌ No historical data available for <code>${symbol}</code>.`, { parse_mode: 'HTML' });
+  }
+
+  const loading = await ctx.reply(`📊 Backtesting <code>${symbol}</code> strategy on historical data…`, { parse_mode: 'HTML' });
+  try {
+    const result = runBacktest(d.closes);
+    await bot.telegram.editMessageText(
+      ctx.chat.id, loading.message_id, null,
+      formatBacktest(result, symbol, d.pip),
+      { parse_mode: 'HTML' }
+    );
+  } catch (e) {
+    console.error('[backtest]', e.message);
+    await ctx.reply('❌ Backtest failed — check logs.', { parse_mode: 'HTML' });
   }
 });
 
@@ -532,8 +596,8 @@ bot.command('history', async ctx => {
 //  CRON JOBS
 // ─────────────────────────────────────────────────────────────────────────────
 
-// Every 2 min — signal change detection (no re-fetch, uses cached data)
-cron.schedule('*/2 * * * *', async () => {
+// Every 5 min — signal change detection (no re-fetch, uses cached data)
+cron.schedule('*/5 * * * *', async () => {
   if (!state.autoMode || !state.subscribers.size) return;
   if (!Object.keys(state.marketData).length) return;
 
@@ -555,16 +619,16 @@ cron.schedule('*/2 * * * *', async () => {
   }
 });
 
-// Every 15 min — fresh data + alert on changes
-cron.schedule('*/15 * * * *', async () => {
-  console.log('[cron] 15-min scan…');
+// Every 20 min — fresh data + alert on changes
+cron.schedule('*/20 * * * *', async () => {
+  console.log('[cron] 20-min scan…');
   await runAutoScan(state.autoMode);
-  console.log('[cron] 15-min scan done');
+  console.log('[cron] 20-min scan done');
 });
 
-// Every 1 hour — full scan + AI on strongest signal
-cron.schedule('0 * * * *', async () => {
-  console.log('[cron] Hourly scan…');
+// Every 2 hours — full scan + AI on strongest signal
+cron.schedule('0 */2 * * *', async () => {
+  console.log('[cron] 2-hour scan…');
   if (!state.autoMode || !state.subscribers.size) return;
   await refreshData();
 
@@ -590,14 +654,14 @@ cron.schedule('0 * * * *', async () => {
   console.log('[cron] Hourly done');
 });
 
-// Every 4 hours — market report
-cron.schedule('0 */4 * * *', async () => {
-  console.log('[cron] 4-hour report…');
+// Every 6 hours — market report
+cron.schedule('0 */6 * * *', async () => {
+  console.log('[cron] 6-hour report…');
   if (!state.autoMode || !state.subscribers.size) return;
   const sigs     = allSignals();
   const sessions = getActiveSessions(utcHour());
   await broadcast(formatMarketReport(sigs, sessions));
-  console.log('[cron] 4-hour report sent');
+  console.log('[cron] 6-hour report sent');
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
